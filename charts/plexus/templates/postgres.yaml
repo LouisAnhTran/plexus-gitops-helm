@@ -100,10 +100,11 @@ spec:
         name: data
       spec:
         accessModes: ["ReadWriteOnce"]
-        # Stated explicitly even though it is the default. The API server
-        # injects it, and volumeClaimTemplates is immutable on a StatefulSet —
-        # so if the chart omits it, Argo CD sees a field it cannot reconcile and
-        # reports OutOfSync forever with no way to fix it.
+        # Stated explicitly to document what you actually get. The API server
+        # would inject it anyway; declaring it keeps the chart honest about the
+        # live shape. (It does not fix the Argo CD diff on its own — the server
+        # also injects apiVersion, kind and a server-owned status into each
+        # entry, which is why the Application ignores this path entirely.)
         volumeMode: Filesystem
         {{- if .Values.postgres.storageClassName }}
         storageClassName: {{ .Values.postgres.storageClassName }}

@@ -59,3 +59,19 @@ spec:
       kind: Deployment
       jsonPointers:
         - /spec/replicas   # leave room for an HPA later
+
+    # StatefulSet volumeClaimTemplates can never match what a chart declares:
+    # the API server injects apiVersion, kind and status: {phase: ...} into each
+    # entry, and status is server-owned so no manifest can express it.
+    #
+    # This is not a cosmetic workaround. volumeClaimTemplates is IMMUTABLE on a
+    # StatefulSet — Kubernetes rejects any change to it — so a diff here is by
+    # definition unreconcilable, and Argo CD would sit at OutOfSync forever
+    # while the cluster was in fact correct. Resizing the volume means editing
+    # the PVC directly or recreating the StatefulSet, neither of which this
+    # field can drive.
+    - group: apps
+      kind: StatefulSet
+      name: plexus-postgres
+      jsonPointers:
+        - /spec/volumeClaimTemplates
