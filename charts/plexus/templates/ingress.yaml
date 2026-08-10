@@ -2,20 +2,16 @@
 {{/*
 Public entry point.
 
-Does the same job as the gateway — /api to the host backend, everything else to
-the frontend — but at the ingress controller instead of an in-cluster Caddy. Run
-one or the other, not both.
+The entry point: /api to the host backend, everything else to the frontend. The
+controller does the path split, so there is no in-cluster proxy.
 
 Path ordering matters: /api must come first. Ingress path matching is not
 guaranteed to prefer the longest prefix across all controllers, and a "/" rule
 evaluated first would swallow /api requests into the frontend, which serves a
 404 page instead of proxying.
 */}}
-{{- if not .Values.ingress.host }}
-{{- fail "ingress.enabled is true but ingress.host is empty — set the hostname it should answer on" }}
-{{- end }}
-{{- if .Values.gateway.enabled }}
-{{- fail "ingress.enabled and gateway.enabled are both true — they do the same routing. Disable the gateway." }}
+{{- if and .Values.ingress.tls.enabled (not .Values.ingress.host) }}
+{{- fail "ingress.tls.enabled requires ingress.host — a certificate has to be issued for a name, not an IP" }}
 {{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -36,8 +32,10 @@ spec:
       secretName: {{ .Values.ingress.tls.secretName }}
   {{- end }}
   rules:
-    - host: {{ .Values.ingress.host | quote }}
-      http:
+      # No `host` when none is set: the rule then matches any hostname, so you
+      # can hit the load balancer's IP directly without configuring DNS.
+    - {{ if .Values.ingress.host }}host: {{ .Values.ingress.host | quote }}
+      {{ end }}http:
         paths:
           - path: /api
             pathType: Prefix

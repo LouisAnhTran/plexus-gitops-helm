@@ -1,8 +1,9 @@
 {{/*
 The React UI, built into the image and served as static files.
 
-Not reachable directly — the gateway sits in front, because a static file server
-cannot proxy /api and api.js calls the relative path "/api/...".
+Not reachable directly — the Ingress sits in front. A static file server cannot
+proxy /api, and api.js calls the relative path "/api/...", so the path split has
+to happen upstream of this pod.
 */}}
 apiVersion: v1
 kind: Service

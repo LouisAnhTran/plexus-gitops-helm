@@ -115,47 +115,40 @@ frontend:
     requests: { cpu: 50m, memory: 64Mi }
     limits:   { memory: 256Mi }
 
-# ── Gateway: routes / to the UI and /api to the host ─────────────────────────
-# Exists because the frontend serves static files and cannot proxy /api itself
-# (api.js calls the relative path "/api/..."). Deliberately a ClusterIP with no
-# Ingress and no LoadBalancer — reach it with:
+# ── Ingress — the entry point ────────────────────────────────────────────────
+# Routes /api to the host backend and / to the frontend. There is no in-cluster
+# proxy: the ingress controller does the path split itself.
 #
-#   kubectl -n plexus port-forward svc/plexus-gateway 8080:80
+#   ⚠️ ingress-nginx installs a Service of type LoadBalancer, so this DOES cost
+#   money on GKE — roughly $18-22/month, i.e. ~$0.60/day, which is proportional
+#   if the cluster only runs for a few hours. To avoid it entirely you would use
+#   controller.service.type=NodePort and hit a node IP, or skip Ingress and run
+#   cloudflared as a pod.
 #
-# Swap in an Ingress or a Cloudflare Tunnel when you want it publicly reachable.
-gateway:
-  enabled: true
-  image:
-    repository: caddy
-    tag: 2-alpine
-  replicas: 1
-  port: 80
-  resources:
-    requests: { cpu: 50m, memory: 64Mi }
-    limits:   { memory: 128Mi }
-
-# ── Ingress (for later, when the app should be publicly reachable) ───────────
-# Disabled by default. Turning it on does the same path routing the gateway
-# does — /api to the host backend, / to the frontend — so set gateway.enabled
-# to false at the same time rather than running both.
-#
-#   ⚠️ An ingress controller does NOT avoid the load-balancer cost by itself.
-#   On GKE, className "gce" provisions an external HTTP(S) LB (~$18-22/mo), and
-#   ingress-nginx installs a Service of type LoadBalancer by default, which
-#   provisions one too. To stay at $0 you need one of:
-#     * ingress-nginx with controller.service.type=NodePort (+ a node's IP), or
-#     * ingress-nginx with hostNetwork/hostPort, or
-#     * no ingress at all — cloudflared as a pod, tunnelling out
-#
-#   ⚠️ Read the note in the chart README before exposing this publicly. The app
-#   has no authentication and calls paid LLM APIs.
+#   ⚠️ The app has no authentication and allow_origins=["*"]. Anyone who reaches
+#   it can create agents and chat, which spends real Anthropic/OpenAI credits.
+#   Fine for a cluster that lives for hours; not for one left up.
 ingress:
-  enabled: false
-  # "gce" for GKE's built-in controller, "nginx" for ingress-nginx.
+  enabled: true
+
+  # ingress-nginx, not GKE's built-in "gce" class. The gce controller needs
+  # backend Services to be NodePort (or NEG-annotated for container-native
+  # load balancing); ingress-nginx routes to ClusterIP Services directly, which
+  # is what this chart creates.
+  #
+  # Install the controller once per cluster — it is not part of this chart:
+  #   helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+  #   helm install ingress-nginx ingress-nginx/ingress-nginx \
+  #     -n ingress-nginx --create-namespace
   className: nginx
-  host: ""            # e.g. plexus.example.com — required when enabled
+
+  # Leave empty to match any hostname, so you can hit the load balancer's IP
+  # directly with no DNS at all. Set a hostname once you have one.
+  host: ""
+
   annotations: {}
     # cert-manager.io/cluster-issuer: letsencrypt-prod
+
   tls:
     enabled: false
     secretName: plexus-tls
