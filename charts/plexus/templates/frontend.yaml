@@ -1,0 +1,61 @@
+{{/*
+The React UI, built into the image and served as static files.
+
+Not reachable directly — the gateway sits in front, because a static file server
+cannot proxy /api and api.js calls the relative path "/api/...".
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "plexus.componentName" (dict "root" $ "component" "frontend") }}
+  labels:
+    {{- include "plexus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.frontend.port }}
+      targetPort: http
+      name: http
+  selector:
+    {{- include "plexus.selectorLabels" (dict "root" $ "component" "frontend") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "plexus.componentName" (dict "root" $ "component" "frontend") }}
+  labels:
+    {{- include "plexus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  replicas: {{ .Values.frontend.replicas }}
+  selector:
+    matchLabels:
+      {{- include "plexus.selectorLabels" (dict "root" $ "component" "frontend") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "plexus.labels" . | nindent 8 }}
+        app.kubernetes.io/component: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: {{ include "plexus.image" (dict "root" $ "image" .Values.frontend.image) }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.frontend.port }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}

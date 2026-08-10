@@ -1,0 +1,12 @@
+# Never commit rendered secrets or local overrides
+values-local.yaml
+values-secrets.yaml
+*-secrets.yaml
+secrets.yaml
+
+# Helm build artefacts
+charts/*/charts/
+charts/*.tgz
+.helm/
+
+.DS_Store

@@ -1,0 +1,109 @@
+{{- if .Values.postgres.enabled }}
+{{/*
+Postgres + pgvector.
+
+A StatefulSet rather than a Deployment: stable network identity, ordered
+lifecycle, and a volumeClaimTemplate that keeps the PVC when the pod is
+replaced. At one replica a Deployment would mostly work, but this is the correct
+shape for stateful workloads and matters the moment a node is preempted.
+
+The nodes are Spot, so this pod *will* be evicted eventually. The PVC is a
+persistent disk that outlives the pod, so a preemption costs a minute of
+downtime, not the data.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "plexus.componentName" (dict "root" $ "component" "postgres") }}
+  labels:
+    {{- include "plexus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  # ClusterIP only. Nothing outside the cluster should reach the database.
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.postgres.port }}
+      targetPort: postgres
+      name: postgres
+  selector:
+    {{- include "plexus.selectorLabels" (dict "root" $ "component" "postgres") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "plexus.componentName" (dict "root" $ "component" "postgres") }}
+  labels:
+    {{- include "plexus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  serviceName: {{ include "plexus.componentName" (dict "root" $ "component" "postgres") }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "plexus.selectorLabels" (dict "root" $ "component" "postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "plexus.labels" . | nindent 8 }}
+        app.kubernetes.io/component: postgres
+    spec:
+      securityContext:
+        # The postgres image runs as uid 999 and needs to own its data dir.
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: {{ .Values.postgres.port }}
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "plexus.fullname" . }}-config
+                  key: POSTGRES_USER
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "plexus.fullname" . }}-config
+                  key: POSTGRES_DB
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "plexus.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            # The image refuses to initialise into a non-empty directory, and a
+            # mounted PV always contains lost+found. Putting the cluster in a
+            # subdirectory is the documented workaround.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.postgres.storageClassName }}
+        storageClassName: {{ .Values.postgres.storageClassName }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.storage }}
+{{- end }}

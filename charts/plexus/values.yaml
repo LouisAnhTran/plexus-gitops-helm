@@ -1,0 +1,161 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Plexus — default values
+#
+#  Image tags are per-service on purpose: CI bumps one service at a time, and a
+#  shared appVersion would force every pod to restart when only one changed.
+#  A PR from GitHub Actions edits exactly one `tag:` line below.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Registry prefix for our own images. Set once; each service appends its name.
+#   asia-southeast1-docker.pkg.dev/<project>/<repo>
+imageRegistry: asia-southeast1-docker.pkg.dev/plexus-louis-2026/plexus
+
+imagePullPolicy: IfNotPresent
+
+# ── Secrets ──────────────────────────────────────────────────────────────────
+# The chart never contains secret values. Two modes:
+#
+#   create: false  (default, and what GitOps should use)
+#       The Secret is created out-of-band and referenced by name. Nothing
+#       sensitive is in Git. Create it once with:
+#
+#         kubectl -n plexus create secret generic plexus-secrets \
+#           --from-literal=ANTHROPIC_API_KEY=... \
+#           --from-literal=OPENAI_API_KEY=... \
+#           --from-literal=EINVOICE_API_KEY=... \
+#           --from-literal=POSTGRES_PASSWORD=...
+#
+#   create: true
+#       Renders a Secret from the values below. Only for a throwaway cluster,
+#       and only with `--set` or a gitignored values file — never commit them.
+#
+# The real fix later is a secret manager: Sealed Secrets, SOPS, or External
+# Secrets backed by GCP Secret Manager. Then this flips back to create: false
+# and something else populates the Secret.
+secrets:
+  name: plexus-secrets
+  create: false
+  values:
+    ANTHROPIC_API_KEY: ""
+    OPENAI_API_KEY: ""
+    EINVOICE_API_KEY: ""
+    POSTGRES_PASSWORD: ""
+
+# ── Postgres (in-cluster, with pgvector) ─────────────────────────────────────
+postgres:
+  enabled: true
+  # Upstream image: kb_articles.embedding is vector(1536), so plain postgres
+  # would fail at CREATE EXTENSION vector.
+  image:
+    repository: pgvector/pgvector
+    tag: pg16
+  user: postgres
+  database: plexus
+  port: 5432
+  storage: 10Gi
+  # No storageClassName: GKE's default (pd-balanced) is what we want.
+  storageClassName: ""
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { memory: 1Gi }
+
+# ── The agent host: LangGraph runtime + MCP client ───────────────────────────
+mcpHostBackend:
+  image:
+    name: mcp-host-backend
+    tag: latest
+  # Pinned at 1. The MCP tool cache is per-process, and init_db() runs DDL on
+  # startup — two replicas would race on CREATE TABLE IF NOT EXISTS and only
+  # one would hold a warm cache. Raising this needs the migration Job first.
+  replicas: 1
+  port: 8000
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits:   { memory: 1Gi }
+
+# ── The dummy business API the MCP server wraps ──────────────────────────────
+einvoiceApi:
+  image:
+    name: einvoice-api
+    tag: latest
+  # Pinned at 1: storage is in-process SQLite, so two replicas would be two
+  # divergent databases serving the same clients.
+  replicas: 1
+  port: 8100
+  # ":memory:" or a path. A path needs a volume; not worth it for a dummy.
+  databasePath: ":memory:"
+  # Seconds each pending state sits before it settles.
+  autoAdvanceSeconds: "30"
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { memory: 512Mi }
+
+# ── The MCP server ───────────────────────────────────────────────────────────
+einvoiceMcp:
+  image:
+    name: einvoice-mcp
+    tag: latest
+  # Safe to scale: the server runs with stateless_http=True, so any replica can
+  # serve any request without session affinity.
+  replicas: 1
+  port: 9000
+  apiTimeoutSeconds: "15"
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { memory: 512Mi }
+
+# ── React UI (static files) ──────────────────────────────────────────────────
+frontend:
+  image:
+    name: plexus-frontend
+    tag: latest
+  replicas: 1
+  port: 3000
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { memory: 256Mi }
+
+# ── Gateway: routes / to the UI and /api to the host ─────────────────────────
+# Exists because the frontend serves static files and cannot proxy /api itself
+# (api.js calls the relative path "/api/..."). Deliberately a ClusterIP with no
+# Ingress and no LoadBalancer — reach it with:
+#
+#   kubectl -n plexus port-forward svc/plexus-gateway 8080:80
+#
+# Swap in an Ingress or a Cloudflare Tunnel when you want it publicly reachable.
+gateway:
+  enabled: true
+  image:
+    repository: caddy
+    tag: 2-alpine
+  replicas: 1
+  port: 80
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { memory: 128Mi }
+
+# ── Ingress (for later, when the app should be publicly reachable) ───────────
+# Disabled by default. Turning it on does the same path routing the gateway
+# does — /api to the host backend, / to the frontend — so set gateway.enabled
+# to false at the same time rather than running both.
+#
+#   ⚠️ An ingress controller does NOT avoid the load-balancer cost by itself.
+#   On GKE, className "gce" provisions an external HTTP(S) LB (~$18-22/mo), and
+#   ingress-nginx installs a Service of type LoadBalancer by default, which
+#   provisions one too. To stay at $0 you need one of:
+#     * ingress-nginx with controller.service.type=NodePort (+ a node's IP), or
+#     * ingress-nginx with hostNetwork/hostPort, or
+#     * no ingress at all — cloudflared as a pod, tunnelling out
+#
+#   ⚠️ Read the note in the chart README before exposing this publicly. The app
+#   has no authentication and calls paid LLM APIs.
+ingress:
+  enabled: false
+  # "gce" for GKE's built-in controller, "nginx" for ingress-nginx.
+  className: nginx
+  host: ""            # e.g. plexus.example.com — required when enabled
+  annotations: {}
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    enabled: false
+    secretName: plexus-tls

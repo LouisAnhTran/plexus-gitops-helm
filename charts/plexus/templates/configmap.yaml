@@ -1,0 +1,35 @@
+{{/*
+Non-secret configuration for every service.
+
+Service addresses are built from the release name rather than hardcoded, so two
+releases in one cluster do not point at each other's pods.
+
+Nothing sensitive belongs here — a ConfigMap is readable by anything with get
+access in the namespace, and it lands in Git. Credentials go in the Secret.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "plexus.fullname" . }}-config
+  labels:
+    {{- include "plexus.labels" . | nindent 4 }}
+data:
+  # ── host backend ──────────────────────────────────────────────────────────
+  # Service DNS, not localhost: inside a pod localhost is the pod itself.
+  MCP_EINVOICE_URL: "http://{{ .Release.Name }}-einvoice-mcp:{{ .Values.einvoiceMcp.port }}/mcp"
+
+  # ── einvoice-api ──────────────────────────────────────────────────────────
+  EINVOICE_DATABASE_PATH: {{ .Values.einvoiceApi.databasePath | quote }}
+  EINVOICE_AUTO_ADVANCE_SECONDS: {{ .Values.einvoiceApi.autoAdvanceSeconds | quote }}
+  EINVOICE_HOST: "0.0.0.0"
+  EINVOICE_PORT: {{ .Values.einvoiceApi.port | quote }}
+
+  # ── einvoice-mcp ──────────────────────────────────────────────────────────
+  EINVOICE_API_BASE_URL: "http://{{ .Release.Name }}-einvoice-api:{{ .Values.einvoiceApi.port }}"
+  EINVOICE_API_TIMEOUT_SECONDS: {{ .Values.einvoiceMcp.apiTimeoutSeconds | quote }}
+  MCP_HOST: "0.0.0.0"
+  MCP_PORT: {{ .Values.einvoiceMcp.port | quote }}
+
+  # ── postgres ──────────────────────────────────────────────────────────────
+  POSTGRES_USER: {{ .Values.postgres.user | quote }}
+  POSTGRES_DB: {{ .Values.postgres.database | quote }}

@@ -1,0 +1,34 @@
+{{- if .Values.gateway.enabled }}
+{{/*
+Gateway — the in-cluster equivalent of Caddy in docker-compose.dev.yml.
+
+Why this exists rather than an Ingress: an Ingress on GKE provisions a
+LoadBalancer (~$18-22/month), and we deliberately have none. This is a plain
+ClusterIP you reach with:
+
+    kubectl -n plexus port-forward svc/<release>-gateway 8080:80
+
+Swap in an Ingress, or run cloudflared alongside it, when you want a public
+hostname. The routing rules stay the same either way.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "plexus.componentName" (dict "root" $ "component" "gateway") }}-config
+  labels:
+    {{- include "plexus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+data:
+  Caddyfile: |
+    # Plain HTTP on :80 — no TLS. Terminating TLS is the job of whatever sits
+    # in front (Ingress, tunnel, or nothing at all for port-forward).
+    :80 {
+    	handle /api/* {
+    		reverse_proxy {{ include "plexus.componentName" (dict "root" $ "component" "mcp-host-backend") }}:{{ .Values.mcpHostBackend.port }}
+    	}
+
+    	handle {
+    		reverse_proxy {{ include "plexus.componentName" (dict "root" $ "component" "frontend") }}:{{ .Values.frontend.port }}
+    	}
+    }
+{{- end }}

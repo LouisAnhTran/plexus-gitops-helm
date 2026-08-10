@@ -1,0 +1,56 @@
+{{- if .Values.ingress.enabled }}
+{{/*
+Public entry point.
+
+Does the same job as the gateway — /api to the host backend, everything else to
+the frontend — but at the ingress controller instead of an in-cluster Caddy. Run
+one or the other, not both.
+
+Path ordering matters: /api must come first. Ingress path matching is not
+guaranteed to prefer the longest prefix across all controllers, and a "/" rule
+evaluated first would swallow /api requests into the frontend, which serves a
+404 page instead of proxying.
+*/}}
+{{- if not .Values.ingress.host }}
+{{- fail "ingress.enabled is true but ingress.host is empty — set the hostname it should answer on" }}
+{{- end }}
+{{- if .Values.gateway.enabled }}
+{{- fail "ingress.enabled and gateway.enabled are both true — they do the same routing. Disable the gateway." }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "plexus.fullname" . }}
+  labels:
+    {{- include "plexus.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "plexus.componentName" (dict "root" $ "component" "mcp-host-backend") }}
+                port:
+                  number: {{ .Values.mcpHostBackend.port }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "plexus.componentName" (dict "root" $ "component" "frontend") }}
+                port:
+                  number: {{ .Values.frontend.port }}
+{{- end }}

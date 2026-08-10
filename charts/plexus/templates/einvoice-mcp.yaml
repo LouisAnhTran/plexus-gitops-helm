@@ -1,0 +1,82 @@
+{{/*
+The e-invoice MCP server.
+
+Safe to scale past one replica, unlike the API behind it: the server runs with
+stateless_http=True, so it keeps no per-client session state and any replica can
+serve any request without session affinity.
+
+Holds one secret (the upstream API key) and no database credentials.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "plexus.componentName" (dict "root" $ "component" "einvoice-mcp") }}
+  labels:
+    {{- include "plexus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: einvoice-mcp
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.einvoiceMcp.port }}
+      targetPort: http
+      name: http
+  selector:
+    {{- include "plexus.selectorLabels" (dict "root" $ "component" "einvoice-mcp") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "plexus.componentName" (dict "root" $ "component" "einvoice-mcp") }}
+  labels:
+    {{- include "plexus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: einvoice-mcp
+spec:
+  replicas: {{ .Values.einvoiceMcp.replicas }}
+  selector:
+    matchLabels:
+      {{- include "plexus.selectorLabels" (dict "root" $ "component" "einvoice-mcp") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "plexus.labels" . | nindent 8 }}
+        app.kubernetes.io/component: einvoice-mcp
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      containers:
+        - name: einvoice-mcp
+          image: {{ include "plexus.image" (dict "root" $ "image" .Values.einvoiceMcp.image) }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.einvoiceMcp.port }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "plexus.fullname" . }}-config
+          env:
+            # Same value as einvoice-api's: it is a shared secret sent as
+            # X-Api-Key. A mismatch makes every tool call fail with 401.
+            - name: EINVOICE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "plexus.secretName" . }}
+                  key: EINVOICE_API_KEY
+          # Probes hit /healthz, not /mcp — kubelet cannot speak JSON-RPC.
+          # /healthz returns 503 when the upstream API is unreachable, so a
+          # failing readiness probe points at the real cause.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            # Deliberately NOT /healthz: that reports upstream reachability, so
+            # an einvoice-api outage would restart this pod pointlessly.
+            # Liveness should only ask "is this process wedged?".
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.einvoiceMcp.resources | nindent 12 }}

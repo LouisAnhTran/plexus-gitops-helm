@@ -1,0 +1,82 @@
+{{/*
+The dummy InvoiceNow Access Point API.
+
+replicas is pinned to 1 in values.yaml: storage is SQLite inside the process, so
+two replicas would be two divergent databases serving the same clients. The
+comment lives in values.yaml too, because that is where someone would try to
+change it.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "plexus.componentName" (dict "root" $ "component" "einvoice-api") }}
+  labels:
+    {{- include "plexus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: einvoice-api
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.einvoiceApi.port }}
+      targetPort: http
+      name: http
+  selector:
+    {{- include "plexus.selectorLabels" (dict "root" $ "component" "einvoice-api") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "plexus.componentName" (dict "root" $ "component" "einvoice-api") }}
+  labels:
+    {{- include "plexus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: einvoice-api
+spec:
+  replicas: {{ .Values.einvoiceApi.replicas }}
+  strategy:
+    # Recreate, not RollingUpdate: with in-process SQLite there is nothing to
+    # gain from overlapping old and new pods, and briefly running two means two
+    # different datasets answering requests.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "plexus.selectorLabels" (dict "root" $ "component" "einvoice-api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "plexus.labels" . | nindent 8 }}
+        app.kubernetes.io/component: einvoice-api
+      annotations:
+        # Roll the pods when config changes. Without this, editing the ConfigMap
+        # leaves running pods with the old values until something else restarts
+        # them — a classic silent-staleness bug.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      containers:
+        - name: einvoice-api
+          image: {{ include "plexus.image" (dict "root" $ "image" .Values.einvoiceApi.image) }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.einvoiceApi.port }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "plexus.fullname" . }}-config
+          env:
+            - name: EINVOICE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "plexus.secretName" . }}
+                  key: EINVOICE_API_KEY
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.einvoiceApi.resources | nindent 12 }}

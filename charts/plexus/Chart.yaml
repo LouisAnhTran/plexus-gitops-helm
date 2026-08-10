@@ -1,0 +1,12 @@
+apiVersion: v2
+name: plexus
+description: >-
+  Plexus — an MCP host platform. Agents get their capabilities from MCP servers
+  discovered at runtime rather than from a hardcoded tool catalog.
+type: application
+
+# version      the chart's own version — bump when templates change
+# appVersion   informational; real image tags live per-service in values.yaml,
+#              because CI bumps them independently
+version: 0.1.0
+appVersion: "0.1.0"

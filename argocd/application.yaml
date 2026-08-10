@@ -1,0 +1,61 @@
+# Argo CD Application — the single object that makes this repo the source of
+# truth for the cluster.
+#
+# Apply it once by hand:
+#     kubectl apply -f argocd/application.yaml
+#
+# After that, Argo CD watches the repo and reconciles. Nothing is deployed with
+# `helm install` again; the way to change the cluster is to change this repo.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: plexus
+  namespace: argocd
+  finalizers:
+    # Without this, deleting the Application leaves its resources orphaned in
+    # the cluster.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/LouisAnhTran/plexus-gitops-helm.git
+    targetRevision: main
+    path: charts/plexus
+    helm:
+      releaseName: plexus
+      # No valueFiles override: values.yaml in the chart IS the environment
+      # config. One cluster, one set of values — add a values-prod.yaml here
+      # when there is a second environment to differentiate.
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: plexus
+
+  syncPolicy:
+    automated:
+      # Revert manual kubectl edits back to what the repo says. This is the
+      # point of GitOps: the cluster is not a place you change things.
+      selfHeal: true
+      # Delete resources removed from the chart. Without this, deleting a
+      # template leaves the object running forever.
+      prune: true
+    syncOptions:
+      - CreateNamespace=true
+      # Server-side apply handles large CRDs and shared-field ownership better
+      # than the client-side three-way merge.
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+
+  # Ignore fields the cluster legitimately owns, so Argo CD does not report
+  # OutOfSync forever over things it should not manage.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas   # leave room for an HPA later

@@ -1,0 +1,105 @@
+{{/*
+The agent host: LangGraph runtime + MCP client.
+
+Pinned to one replica (see values.yaml): init_db() runs DDL on every startup, and
+two pods racing on CREATE TABLE IF NOT EXISTS can fail with
+"duplicate key value violates unique constraint pg_type_typname_nsp_index".
+The MCP tool cache is also per-process, so a second replica would start cold.
+Raising replicas needs the schema moved into a migration Job first.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "plexus.componentName" (dict "root" $ "component" "mcp-host-backend") }}
+  labels:
+    {{- include "plexus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-host-backend
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.mcpHostBackend.port }}
+      targetPort: http
+      name: http
+  selector:
+    {{- include "plexus.selectorLabels" (dict "root" $ "component" "mcp-host-backend") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "plexus.componentName" (dict "root" $ "component" "mcp-host-backend") }}
+  labels:
+    {{- include "plexus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-host-backend
+spec:
+  replicas: {{ .Values.mcpHostBackend.replicas }}
+  strategy:
+    # Recreate: while replicas is 1 and startup runs DDL, overlapping old and
+    # new pods means two processes doing CREATE TABLE at once.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "plexus.selectorLabels" (dict "root" $ "component" "mcp-host-backend") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "plexus.labels" . | nindent 8 }}
+        app.kubernetes.io/component: mcp-host-backend
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      containers:
+        - name: mcp-host-backend
+          image: {{ include "plexus.image" (dict "root" $ "image" .Values.mcpHostBackend.image) }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.mcpHostBackend.port }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "plexus.fullname" . }}-config
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "plexus.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            # Kubernetes expands $(POSTGRES_PASSWORD) from the env var above.
+            # That keeps the password out of the ConfigMap and out of Git while
+            # still handing the app the single DATABASE_URL it expects, with no
+            # code change.
+            - name: DATABASE_URL
+              value: {{ include "plexus.databaseUrl" . | quote }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "plexus.secretName" . }}
+                  key: ANTHROPIC_API_KEY
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "plexus.secretName" . }}
+                  key: OPENAI_API_KEY
+          # Startup is slow and variable: it creates the schema, runs guarded
+          # migrations, then reconnects to every wired MCP server. A
+          # startupProbe gives it room without making the liveness probe
+          # permissive once it is running.
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30   # up to ~150s to become ready
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            # /api/health reports db + API-key presence. If Postgres goes away,
+            # restarting this pod will not help, so liveness only checks that
+            # the process is still accepting connections.
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.mcpHostBackend.resources | nindent 12 }}
