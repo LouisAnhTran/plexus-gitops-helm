@@ -108,7 +108,7 @@ einvoiceMcp:
 frontend:
   image:
     name: plexus-frontend
-    tag: 5511f32ca9fb
+    tag: 59a89db39302
   replicas: 1
   port: 3000
   resources:
