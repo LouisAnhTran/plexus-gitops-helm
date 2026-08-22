@@ -94,7 +94,7 @@ einvoiceApi:
 einvoiceMcp:
   image:
     name: einvoice-mcp
-    tag: 3dd5af6675fe
+    tag: 71f46bc18fcc
   # Safe to scale: the server runs with stateless_http=True, so any replica can
   # serve any request without session affinity.
   replicas: 1
