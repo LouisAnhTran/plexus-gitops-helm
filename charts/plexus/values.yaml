@@ -63,7 +63,7 @@ postgres:
 mcpHostBackend:
   image:
     name: mcp-host-backend
-    tag: ee5b21452d92
+    tag: 3f6efa91ce3d
   # Pinned at 1. The MCP tool cache is per-process, and init_db() runs DDL on
   # startup — two replicas would race on CREATE TABLE IF NOT EXISTS and only
   # one would hold a warm cache. Raising this needs the migration Job first.
