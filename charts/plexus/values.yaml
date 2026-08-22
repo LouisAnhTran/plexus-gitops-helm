@@ -77,7 +77,7 @@ mcpHostBackend:
 einvoiceApi:
   image:
     name: einvoice-api
-    tag: ef453192f3f9
+    tag: 4bd07c2810f3
   # Pinned at 1: storage is in-process SQLite, so two replicas would be two
   # divergent databases serving the same clients.
   replicas: 1
